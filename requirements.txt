@@ -1,0 +1,5 @@
+imagecodecs
+matplotlib
+numpy
+opencv-python
+tifffile
