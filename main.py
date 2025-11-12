@@ -27,7 +27,8 @@ images_s1 = [center_crop_to_match(img1, img2) for img1, img2 in images_s1]
 images_s2 = [center_crop_to_match(img1, img2) for img1, img2 in images_s2]
 
 ########################################################
-
+# CHANGE MAP COMPUTATION
+########################################################
 def compute_change_map(image_t1, image_t2):
     diff = np.abs(image_t2.astype(np.float32) - image_t1.astype(np.float32))
     #Moyenne de la différence sur toutes les bandes. TODO : étudier les changements sur des bandes spécifiques (des bandes non sensibles aux changement d'illumination ou de végétation)
