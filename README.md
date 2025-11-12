@@ -21,7 +21,7 @@ This project aims to analyze urban expansion and land use changes using **Sentin
 ### 1. Data Sources
 - **Sentinel-1 (SAR):** For change detection in urban areas.
 - **Sentinel-2 & Landsat (Optical):** For land cover classification and validation.
-- **Dataset:** [Sentinel-1/2 Image Pairs (Kaggle)](https://github.com/PatrickTUM/multimodalCD_ISPRS21) – Fusing Multi-modal Data for Supervised Change Detection
+- **Dataset:** [Sentinel-1/2 Image Pairs](https://github.com/PatrickTUM/multimodalCD_ISPRS21) – Fusing Multi-modal Data for Supervised Change Detection
 
 available [here](https://filesender.renater.fr/?s=download&token=afb114eb-e75d-4d8e-9464-368737e3c9da) (until 12/12/2025): 
 
