@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import cv2
 from pathlib import Path
-from utils import get_images_from_folder_S1, get_images_from_folder_S2, get_labels_from_folder, get_city_names_from_folder, visualize_data_sizes, basic_crop_to_match, resize_to_min, center_crop_to_match
+from utils import get_images_from_folder_S1, get_images_from_folder_S2, get_B_from_folder_S2, get_labels_from_folder, get_city_names_from_folder, visualize_data_sizes, basic_crop_to_match, resize_to_min, center_crop_to_match, upsample_images, plot_one_image
 
 ########################################################
 # DATA LOADING
@@ -15,28 +15,42 @@ S1_PATH = DATA_DIR / "S1"
 S2_PATH = DATA_DIR / "S2"
 LABELS_PATH = DATA_DIR / "ground_truth"
 
-# on stocke les images du sentinel-1 dans un array de tuple : (image_temps1, image_temps2)
-images_s1 = get_images_from_folder_S1(S1_PATH)
-# on stocke les images du sentinel-2 dans un array de tuple : (image_temps1, image_temps2)
-images_s2 = get_images_from_folder_S2(S2_PATH)
+
+images_s1 = get_images_from_folder_S1(S1_PATH) # Chaque image a 2 channels : VV, VH
+images_s2_RGB = get_images_from_folder_S2(S2_PATH) # Chaque image a 3 channels : R, G, B
+images_s2_B11 = get_B_from_folder_S2(S2_PATH, "11") #Chaque image a 1 channel : B11
+images_s2_B8 = get_B_from_folder_S2(S2_PATH, "08") #Chaque image a 1 channel : B8
 labels = get_labels_from_folder(LABELS_PATH)
 city_names = get_city_names_from_folder(LABELS_PATH)
 
 #reshape les images car certaines paires n'ont pas exactement la même taille
 images_s1 = [center_crop_to_match(img1, img2) for img1, img2 in images_s1]
-images_s2 = [center_crop_to_match(img1, img2) for img1, img2 in images_s2]
+images_s2_RGB = [center_crop_to_match(img1, img2) for img1, img2 in images_s2_RGB]
+images_s2_B11 = [center_crop_to_match(img1, img2) for img1, img2 in images_s2_B11]
+images_s2_B8 = [center_crop_to_match(img1, img2) for img1, img2 in images_s2_B8]
 
+images_s2_B11 = upsample_images(images_s2_B11, images_s2_B8) # Upsample les images de B11 pour qu'elles aient la même taille que les images de B8
+
+images_s2_build_up_index = [ #on étudie les changements sur des bandes spécifiques (bandes non sensibles aux changement d'illumination ou de végétation)
+    [(i11 + i8) / (i11 - i8 + 1e-6) for i11, i8 in zip(pair11, pair8)]
+for pair11, pair8 in zip(images_s2_B11, images_s2_B8)]
+"""print(images_s2_B11[0][0].mean())
+print(images_s2_B8[0][0].mean())
+print(images_s2_build_up_index[0][0].mean())
+plot_one_image(images_s2_build_up_index[0][0], 1)
+input("Press Enter to continue...")"""
 ########################################################
 # CHANGE MAP COMPUTATION
 ########################################################
 def compute_change_map(image_t1, image_t2):
     diff = np.abs(image_t2.astype(np.float32) - image_t1.astype(np.float32))
-    #Moyenne de la différence sur toutes les bandes. TODO : étudier les changements sur des bandes spécifiques (des bandes non sensibles aux changement d'illumination ou de végétation)
+    #Moyenne de la différence sur toutes les bandes.
     diff_gray = np.mean(diff, axis=2)
     #Normalisation entre 0 et 255 pour visualiser
     diff_norm = cv2.normalize(diff_gray, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
     # Otsu cherche automatiquement le meilleur seuil pour séparer "inchangé" / "changé" dans la carte de changement
     _, change_map = cv2.threshold(diff_norm, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
     return change_map
 
 def visualize_change_map(image_t1, image_t2, change_map, ground_truth, satellite, city_name):
@@ -61,8 +75,11 @@ def visualize_change_map(image_t1, image_t2, change_map, ground_truth, satellite
     plt.show()
 
 
-for (image_s1_t1, image_s1_t2),(image_s2_t1, image_s2_t2), ground_truth, city_name in zip(images_s1, images_s2, labels, city_names):
+for (image_s1_t1, image_s1_t2),(image_s2_t1, image_s2_t2), (image_s2_build_up_index_t1, image_s2_build_up_index_t2), ground_truth, city_name in zip(images_s1, images_s2_RGB, images_s2_B11, labels, city_names):
     change_map_s1 = compute_change_map(image_s1_t1, image_s1_t2)
     change_map_s2 = compute_change_map(image_s2_t1, image_s2_t2)
+    change_map_s2_build_up_index = compute_change_map(image_s2_build_up_index_t1, image_s2_build_up_index_t2)
+    visualize_change_map(image_s2_build_up_index_t1, image_s2_build_up_index_t2, change_map_s2_build_up_index, ground_truth, "Sentinel-1", city_name)
     visualize_change_map(image_s1_t1, image_s1_t2, change_map_s1, ground_truth, "Sentinel-1", city_name)
     visualize_change_map(image_s2_t1, image_s2_t2, change_map_s2, ground_truth, "Sentinel-2", city_name)
+
