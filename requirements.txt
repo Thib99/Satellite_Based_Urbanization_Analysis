@@ -4,3 +4,4 @@ numpy
 opencv-python
 tifffile
 tqdm
+scikit-learn

@@ -4,6 +4,8 @@ import matplotlib.pyplot as plt
 import cv2
 from pathlib import Path
 from tqdm import tqdm
+from sklearn.decomposition import PCA
+
 
 from utils import (
     get_images_from_folder_S1, 
@@ -95,6 +97,67 @@ for (pair4, pair11, pair12) in zip(images_s2_B4, images_s2_B11, images_s2_B12):
     V2 = np.stack([i4_t2, i11_t2, i12_t2], axis=-1)
     V1, V2 = np.squeeze(V1), np.squeeze(V2)
     CVAs.append((V1, V2))
+
+
+
+def make_PCA_features(*image_lists: list[tuple[np.ndarray, np.ndarray]])->list[np.ndarray]:
+    """
+    Fait la PCA sur les images de chaque liste et renvoie la magnitude des 2 secondes composantes principales
+    Args:
+        image_lists: list of lists of tuples of images (img1, img2)
+    Returns:
+        list of PCA features, carte des changements
+    """
+    n_pairs = len(image_lists[0])
+    if not all(len(img_list) == n_pairs for img_list in image_lists):
+        raise ValueError("Toutes les listes d'images doivent avoir la même longueur")
+    
+    PCA_features = []
+    
+    # on itère sur chaque paire d'images
+    for i in range(n_pairs):
+        # on extrait toutes les paires pour cet index
+        pairs = [img_list[i] for img_list in image_lists]
+
+        pairs = np.squeeze(pairs)
+        
+        # on sépare t1 et t2 pour chaque bande
+        bands_t1 = [pair[0] for pair in pairs]
+        bands_t2 = [pair[1] for pair in pairs]
+        
+        # on empile par pixel
+        X1 = np.stack(bands_t1, axis=-1)  # shape (H, W, n_bands)
+        X2 = np.stack(bands_t2, axis=-1)  # shape (H, W, n_bands)
+
+        # on concatène temporelement
+        X = np.concatenate([X1, X2], axis=-1)  # shape (H, W, 2*n_bands)
+
+        # on met en vecteur (flatten)
+        H, W, C = X.shape
+        X_flat = X.reshape(-1, C)  # shape (N, 2*n_bands) où N = H*W
+        
+        # PCA
+        pca = PCA(n_components=C)
+        X_pca = pca.fit_transform(X_flat)  # shape (N, n_components)
+        
+        PC2 = X_pca[:, 1].reshape(H, W) # de dim H * W * 1
+        PC3 = X_pca[:, 2].reshape(H, W) # de dim H * W * 1
+        
+        M = np.sqrt(PC2**2 + PC3**2)  # magnitude, de dim H * W * 1
+        M_norm = (M - M.min()) / (M.max() - M.min())
+        M_255 = (M_norm * 255).astype(np.uint8)
+
+        _, binary = cv2.threshold(M_255, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+        PCA_features.append(binary)
+    return PCA_features
+
+
+PCA_features = make_PCA_features(images_s2_B4, images_s2_B11, images_s2_B12)
+print("dimension attendue : H * W * 1")
+print(PCA_features[0].shape)
+input("press enter to continue")
+
 
 ########################################################
 # CHANGE MAP COMPUTATION
@@ -208,6 +271,21 @@ def visualize_change_map(image_t1: np.ndarray, image_t2: np.ndarray, diff_norm: 
         plt.imshow(ground_truth, cmap='gray')
         plt.suptitle(f"Change detection - {city_name} ({title})", fontsize=16)
         plt.show()
+    elif mode == "PCA":
+        plt.subplot(1, 4, 1)
+        plt.title('Image avant (t1)')
+        plt.imshow(image_t1, cmap='jet')
+        plt.subplot(1, 4, 2)
+        plt.title('Image après (t2)')
+        plt.imshow(image_t2, cmap='jet')
+        plt.subplot(1, 4, 3)
+        plt.title('Carte de changement (Otsu)')
+        plt.imshow(change_map, cmap='gray')
+        plt.subplot(1, 4, 4)
+        plt.title('Ground truth')
+        plt.imshow(ground_truth, cmap='gray')
+        plt.suptitle(f"Change detection - {city_name} ({title})", fontsize=16)
+        plt.show()
 
 def evaluate_change_map(change_map: np.ndarray, ground_truth: np.ndarray)->dict:
     """
@@ -255,7 +333,7 @@ metrics_B11 = []
 metrics_B11_mask_NBDI = []
 metrics_B8 = []
 metrics_CVA = []
-
+metrics_PCA = []
 for (
     (image_s1_t1, image_s1_t2),
     (image_s2_t1, image_s2_t2),
@@ -263,6 +341,7 @@ for (
     (image_s2_b8_t1, image_s2_b8_t2),
     (cva_t1, cva_t2),
     mask_build_up_index,
+    PCA_feature,
     ground_truth,
     city_name
 ) in tqdm(
@@ -273,6 +352,7 @@ for (
         images_s2_B8,
         CVAs,
         masks_build_up_index,
+        PCA_features,
         labels,
         city_names
     ),
@@ -294,6 +374,7 @@ for (
     change_map_s2_b11, ground_truth = fitAtoB(change_map_s2_b11, ground_truth)
     change_map_s1, ground_truth = fitAtoB(change_map_s1, ground_truth)
     change_map_cva, ground_truth = fitAtoB(change_map_cva, ground_truth)
+    change_map_PCA, ground_truth = fitAtoB(PCA_feature, ground_truth)
 
     metrics_RGB.append(evaluate_change_map(change_map_s2_RGB, ground_truth))
     metrics_S1.append(evaluate_change_map(change_map_s1, ground_truth))
@@ -301,13 +382,15 @@ for (
     metrics_B11_mask_NBDI.append(evaluate_change_map(change_map_s2_b11_mask_NBDI, ground_truth))
     metrics_B8.append(evaluate_change_map(change_map_s2_b8, ground_truth))
     metrics_CVA.append(evaluate_change_map(change_map_cva, ground_truth))
+    metrics_PCA.append(evaluate_change_map(change_map_PCA, ground_truth))
 
     visualize_change_map(image_s2_t1, image_s2_t2, diff_norm_s2_RGB, change_map_s2_RGB, ground_truth, "RGB", city_name, title="RGB")
     visualize_change_map(image_s1_t1, image_s1_t2, diff_norm_s1, change_map_s1, ground_truth, "S1", city_name, title="S1")
-    visualize_change_map(image_s2_b11_t1, image_s2_b11_t2, diff_norm_s2_b11, change_map_s2_b11, ground_truth, "B", city_name, title="B11")#4
-    visualize_change_map(image_s2_b11_t1, image_s2_b11_t2, diff_norm_s2_b11, change_map_s2_b11_mask_NBDI, ground_truth, "B", city_name, title="B11 mask NBDI")#3
-    visualize_change_map(image_s2_b8_t1, image_s2_b8_t2, diff_norm_s2_b8, change_map_s2_b8, ground_truth, "B", city_name, title="B8")#2
-    visualize_change_map(cva_t1, cva_t2, diff_norm_cva, change_map_cva, ground_truth, "CVA", city_name, title="CVA")#1
+    visualize_change_map(image_s2_b11_t1, image_s2_b11_t2, diff_norm_s2_b11, change_map_s2_b11, ground_truth, "B", city_name, title="B11")
+    visualize_change_map(image_s2_b11_t1, image_s2_b11_t2, diff_norm_s2_b11, change_map_s2_b11_mask_NBDI, ground_truth, "B", city_name, title="B11 mask NBDI")
+    visualize_change_map(image_s2_b8_t1, image_s2_b8_t2, diff_norm_s2_b8, change_map_s2_b8, ground_truth, "B", city_name, title="B8")
+    visualize_change_map(cva_t1, cva_t2, diff_norm_cva, change_map_cva, ground_truth, "CVA", city_name, title="CVA")
+    visualize_change_map(image_s2_t1, image_s2_t2, None, change_map_PCA, ground_truth, "PCA", city_name, title="PCA")
 
 def mean_metric(metrics_list, key):
     return np.round(np.mean([m[key] for m in metrics_list]), 4)
@@ -359,4 +442,13 @@ print(
     "F1-Score CVA: ", mean_metric(metrics_CVA, 'F1-Score'),
     "IoU CVA: ", mean_metric(metrics_CVA, 'IoU'),
     "Kappa CVA: ", mean_metric(metrics_CVA, 'Kappa')
+)
+
+print(
+    "Accuracy PCA: ", mean_metric(metrics_PCA, 'Accuracy'),
+    "Precision PCA: ", mean_metric(metrics_PCA, 'Precision'),
+    "Recall PCA: ", mean_metric(metrics_PCA, 'Recall'),
+    "F1-Score PCA: ", mean_metric(metrics_PCA, 'F1-Score'),
+    "IoU PCA: ", mean_metric(metrics_PCA, 'IoU'),
+    "Kappa PCA: ", mean_metric(metrics_PCA, 'Kappa')
 )
