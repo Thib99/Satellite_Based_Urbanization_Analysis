@@ -5,6 +5,7 @@ data.zip
 pyproject.toml
 uv.lock
 .DS_Store
+rapport
 
 
 *.py[oc]

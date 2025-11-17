@@ -63,7 +63,7 @@ def get_labels_from_folder(folder_path: Path) -> list[np.ndarray]:
     print("Extracting labels from folder...")
     for city_dir in sorted([p for p in folder_path.iterdir() if p.is_dir()]):
         subdir = city_dir / "cm"
-        label = np.asarray(cv2.imread( str(subdir / "cm.png")))
+        label = np.asarray(cv2.imread( str(subdir / "cm.png"), cv2.IMREAD_GRAYSCALE))
         labels.append(label)
     print(f"Extracted {len(labels)} labels from the folder.")
     return labels
@@ -77,12 +77,14 @@ def get_city_names_from_folder(folder_path: Path) -> list[str]:
 ########################################################
 # DATA VISUALIZATION
 ########################################################
-def visualize_data_sizes(images):
+def visualize_data_sizes(images : list[tuple[np.ndarray, np.ndarray]]) -> bool:
+    nb_images_different_sizes = 0
     for i in range(len(images)):
         if images[i][0].shape != images[i][1].shape:
             print(f"Image {i} has different sizes: {images[i][0].shape} and {images[i][1].shape}")
-        else:
-            print(f"Image {i} has the same size: {images[i][0].shape}")
+            nb_images_different_sizes += 1
+    if nb_images_different_sizes == 0:
+        print("All images have the same size")
 
 
 def plot_one_image(image: np.ndarray, channels: int):
@@ -102,19 +104,27 @@ def plot_one_image(image: np.ndarray, channels: int):
 # 3. Resize to the smallest size
 
 def basic_crop_to_match(img1: np.ndarray, img2: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    if img1.shape != img2.shape:
+    if img1.shape[:2] != img2.shape[:2]:
         h = min(img1.shape[0], img2.shape[0])
         w = min(img1.shape[1], img2.shape[1])
         
-        img1_cropped = img1[:h, :w, :]
-        img2_cropped = img2[:h, :w, :]
+        if img1.ndim == 3:
+            img1_cropped = img1[:h, :w, :]
+        else:
+            img1_cropped = img1[:h, :w]
+            
+        if img2.ndim == 3:
+            img2_cropped = img2[:h, :w, :]
+        else:
+            img2_cropped = img2[:h, :w]
     
         return img1_cropped, img2_cropped
-    else : 
+    else:
         return img1, img2
 
 def center_crop_to_match(img1: np.ndarray, img2: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    if img1.shape != img2.shape:
+    
+    if img1.shape[:2] != img2.shape[:2]:
         h = min(img1.shape[0], img2.shape[0])
         w = min(img1.shape[1], img2.shape[1])
 
@@ -123,8 +133,17 @@ def center_crop_to_match(img1: np.ndarray, img2: np.ndarray) -> tuple[np.ndarray
         h_off2 = (img2.shape[0] - h) // 2
         w_off2 = (img2.shape[1] - w) // 2
 
-        img1_c = img1[h_off1:h_off1 + h, w_off1:w_off1 + w, :]
-        img2_c = img2[h_off2:h_off2 + h, w_off2:w_off2 + w, :]
+        # Gestion des images 2D et 3D
+        if img1.ndim == 3:
+            img1_c = img1[h_off1:h_off1 + h, w_off1:w_off1 + w, :]
+        else:
+            img1_c = img1[h_off1:h_off1 + h, w_off1:w_off1 + w]
+            
+        if img2.ndim == 3:
+            img2_c = img2[h_off2:h_off2 + h, w_off2:w_off2 + w, :]
+        else:
+            img2_c = img2[h_off2:h_off2 + h, w_off2:w_off2 + w]
+            
         return img1_c, img2_c
     else:
         return img1, img2
@@ -134,16 +153,16 @@ def resize_to_min(img1: np.ndarray, img2: np.ndarray) -> tuple[np.ndarray, np.nd
         h_min = min(img1.shape[0], img2.shape[0])
         w_min = min(img1.shape[1], img2.shape[1])
         
-        img1_resized = cv2.resize(img1, (w_min, h_min), interpolation=cv2.INTER_LINEAR)
-        img2_resized = cv2.resize(img2, (w_min, h_min), interpolation=cv2.INTER_LINEAR)
+        img1_resized = cv2.resize(img1, (w_min, h_min), interpolation=cv2.INTER_AREA)
+        img2_resized = cv2.resize(img2, (w_min, h_min), interpolation=cv2.INTER_AREA)
         
         return img1_resized, img2_resized
     else:
         return img1, img2
 
 
-def upsample_images(imgsA: list[tuple[np.ndarray, np.ndarray]], imgsB: list[tuple[np.ndarray, np.ndarray]]) -> list[tuple[np.ndarray, np.ndarray]]:
-    """Upsample les images de la liste A pour qu'elles aient la même taille que les images de la liste B. imgsA<imgsB.
+def upsample_images_A(imgsA: list[tuple[np.ndarray, np.ndarray]], imgsB: list[tuple[np.ndarray, np.ndarray]]) -> list[tuple[np.ndarray, np.ndarray]]:
+    """Upsample les images de la liste A pour qu'elles aient la même taille que les images de la liste B.
     Args:
         imgsA: list of tuples of images (img1, img2) 
         imgsB: list of tuples of images (img1, img2)
@@ -152,12 +171,43 @@ def upsample_images(imgsA: list[tuple[np.ndarray, np.ndarray]], imgsB: list[tupl
     """
     upsampled_imgsA = []
     for (imgA1, imgA2), (imgB1, imgB2) in zip(imgsA, imgsB):
-        assert(imgA1.shape[0] < imgB1.shape[0] and imgA1.shape[1] < imgB1.shape[1])
-        h1, w1 = imgB1.shape[0], imgB1.shape[1]
-        h2, w2 = imgB2.shape[0], imgB2.shape[1]
-        upsampled_img1 = cv2.resize(imgA1, (w1, h1), interpolation=cv2.INTER_LINEAR)
-        upsampled_img2 = cv2.resize(imgA2, (w2, h2), interpolation=cv2.INTER_LINEAR)
-        upsampled_img1 = np.expand_dims(upsampled_img1, axis=2)
-        upsampled_img2 = np.expand_dims(upsampled_img2, axis=2)
-        upsampled_imgsA.append((upsampled_img1, upsampled_img2))
+        imgA1, imgB1 = fitAtoB(imgA1, imgB1)
+        imgA2, imgB2 = fitAtoB(imgA2, imgB2)
+        imgA1 = np.expand_dims(imgA1, axis=2)
+        imgA2 = np.expand_dims(imgA2, axis=2)
+        upsampled_imgsA.append((imgA1, imgA2))
     return upsampled_imgsA
+
+def fitAtoB(imgA: np.ndarray, imgB: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Redimensionne l'image A pour qu'elle ait exactement la même taille que l'image B.
+    
+    Args:
+        imgA: Image à redimensionner
+        imgB: Image de référence
+        
+    Returns:
+        Tuple contenant (imgA redimensionnée, imgB inchangée)
+    """
+    if imgA.shape[:2] != imgB.shape[:2]:
+        h_target = imgB.shape[0]
+        w_target = imgB.shape[1]
+        
+        # Choisir l'interpolation selon si on agrandi ou réduit
+        if h_target < imgA.shape[0] or w_target < imgA.shape[1]:
+            # Downsampling
+            interpolation = cv2.INTER_AREA
+        else:
+            # Upsampling
+            interpolation = cv2.INTER_LINEAR
+        
+        imgA_resized = cv2.resize(imgA, (w_target, h_target), interpolation=interpolation)
+        
+        return imgA_resized, imgB
+    else:
+        return imgA, imgB
+            
+
+
+def normalize_image(image: np.ndarray, val_max: int) -> np.ndarray:
+    return image / val_max
