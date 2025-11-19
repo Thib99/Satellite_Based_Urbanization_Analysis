@@ -5,6 +5,8 @@ import cv2
 from pathlib import Path
 from tqdm import tqdm
 from sklearn.decomposition import PCA
+from collections import defaultdict
+
 
 
 from utils import (
@@ -68,6 +70,42 @@ images_s2_B12 = upsample_images_A(images_s2_B12, images_s2_B8) # Upsample les im
 # FEATURE ENGINEERING
 ########################################################
 
+
+# array of VV only : 
+images_s1_VV = [(img1[:,:,0], img2[:,:,0]) for img1, img2 in images_s1]
+# array of VH only : 
+images_s1_VH = [(img1[:,:,1], img2[:,:,1]) for img1, img2 in images_s1]
+
+
+# SAR channels : VV and VH
+def compute_change_map_VVVH(img1: np.ndarray, img2: np.ndarray, alpha: float, beta: float)->np.ndarray:
+    """
+    Compute the change map for the VV and VH channels
+    Args:
+        img1: image before
+        img2: image after
+        alpha: scaling factor for the VV channel
+        beta: scaling factor for the VH channel
+    Returns:
+        change map
+    """
+    VV_t1, VV_t2 = img1[:,:,0], img2[:,:,0]
+    VH_t1, VH_t2 = img1[:,:,1], img2[:,:,1]
+    dVV = np.abs(VV_t2.astype(np.float32) - VV_t1.astype(np.float32))
+    dVH = np.abs(VH_t2.astype(np.float32) - VH_t1.astype(np.float32))
+    scaled_dVV = alpha * dVV
+    scaled_dVH = beta * dVH
+    diff_gray = scaled_dVV + scaled_dVH
+
+    diff_norm = cv2.normalize(diff_gray, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+
+    diff_smooth = cv2.GaussianBlur(diff_norm, (5,5), 1)
+
+    # Otsu cherche automatiquement le meilleur seuil pour séparer "inchangé" / "changé" dans la carte de changement
+    _, change_map = cv2.threshold(diff_smooth, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+    return diff_norm, change_map
+
 # NBDI 
 images_s2_build_up_index = []  #on étudie les changements sur des bandes spécifiques (bandes non sensibles aux changement d'illumination ou de végétation)
 for (pair11, pair8) in zip(images_s2_B11, images_s2_B8):
@@ -99,7 +137,7 @@ for (pair4, pair11, pair12) in zip(images_s2_B4, images_s2_B11, images_s2_B12):
     CVAs.append((V1, V2))
 
 
-
+# PCA
 def make_PCA_features(*image_lists: list[tuple[np.ndarray, np.ndarray]])->list[np.ndarray]:
     """
     Fait la PCA sur les images de chaque liste et renvoie la magnitude des 2 secondes composantes principales
@@ -154,9 +192,6 @@ def make_PCA_features(*image_lists: list[tuple[np.ndarray, np.ndarray]])->list[n
 
 
 PCA_features = make_PCA_features(images_s2_B4, images_s2_B11, images_s2_B12)
-print("dimension attendue : H * W * 1")
-print(PCA_features[0].shape)
-input("press enter to continue")
 
 
 ########################################################
@@ -183,108 +218,120 @@ def visualize_change_map(image_t1: np.ndarray, image_t2: np.ndarray, diff_norm: 
     plt.figure(figsize=(12, 5))
     if mode == "RGB":
         plt.subplot(1, 5, 1)
-        plt.title('Image avant (t1)')
+        plt.title('Image before (t1)')
         plt.imshow(image_t1, cmap='jet')
         plt.subplot(1, 5, 2)
-        plt.title('Image après (t2)')
+        plt.title('Image after (t2)')
         plt.imshow(image_t2, cmap='jet')
         plt.subplot(1, 5, 3)
-        plt.title('Différence normale')
+        plt.title('Difference')
         plt.imshow(diff_norm, cmap='gray')
         plt.subplot(1, 5, 4)
-        plt.title('Carte de changement (Otsu)')
+        plt.title('Change map (Otsu)')
         plt.imshow(change_map, cmap='gray')
         plt.subplot(1, 5, 5)
         plt.title('Ground truth')
         plt.imshow(ground_truth, cmap='gray')
         plt.suptitle(f"Change detection - {city_name} ({title})", fontsize=16)
+        plt.tight_layout()
+        plt.subplots_adjust(wspace=0.3)
         plt.show()
     elif mode == "B":
         plt.subplot(1, 5, 1)
-        plt.title('Image avant (t1)')
+        plt.title('Image before (t1)')
         plt.imshow(image_t1, cmap='gray')
         plt.subplot(1, 5, 2)
-        plt.title('Image après (t2)')
+        plt.title('Image after (t2)')
         plt.imshow(image_t2, cmap='gray')
         plt.subplot(1, 5, 3)    
-        plt.title('Différence normale')
+        plt.title('Difference')
         plt.imshow(diff_norm, cmap='gray')
         plt.subplot(1, 5, 4)
-        plt.title('Carte de changement (Otsu)')
+        plt.title('Change map (Otsu)')
         plt.imshow(change_map, cmap='gray')
         plt.subplot(1, 5, 5)
         plt.title('Ground truth')
         plt.imshow(ground_truth, cmap='gray')
         plt.suptitle(f"Change detection - {city_name} ({title})", fontsize=16)
+        plt.tight_layout()
+        plt.subplots_adjust(wspace=0.3)
         plt.show()
     elif mode == "S1":
         plt.subplot(1, 5, 1)
-        plt.title('Image avant (t1)')
+        plt.title('Image before (t1)')
         plt.imshow(np.mean(image_t1, axis=-1), cmap='gray')
         plt.subplot(1, 5, 2)
-        plt.title('Image après (t2)')
+        plt.title('Image after (t2)')
         plt.imshow(np.mean(image_t2, axis=-1), cmap='gray')
         plt.subplot(1, 5, 3)    
-        plt.title('Différence normale')
+        plt.title('Difference')
         plt.imshow(diff_norm, cmap='gray')
         plt.subplot(1, 5, 4)
-        plt.title('Carte de changement (Otsu)')
+        plt.title('Change map (Otsu)')
         plt.imshow(change_map, cmap='gray')
         plt.subplot(1, 5, 5)
         plt.title('Ground truth')
         plt.imshow(ground_truth, cmap='gray')
         plt.suptitle(f"Change detection - {city_name} ({title})", fontsize=16)
+        plt.tight_layout()
+        plt.subplots_adjust(wspace=0.3)
         plt.show()
     elif mode == "CVA":
         plt.subplot(1, 5, 1)
-        plt.title('Image avant (t1)')
+        plt.title('Image before (t1)')
         plt.imshow(image_t1, cmap='jet')
         plt.subplot(1, 5, 2)
-        plt.title('Image après (t2)')
+        plt.title('Image after (t2)')
         plt.imshow(image_t2, cmap='jet')
         plt.subplot(1, 5, 3)
-        plt.title('Différence normale')
+        plt.title('Difference')
         plt.imshow(diff_norm, cmap='gray')
         plt.subplot(1, 5, 4)
-        plt.title('Carte de changement (Otsu)')
+        plt.title('Change map (Otsu)')
         plt.imshow(change_map, cmap='gray')
         plt.subplot(1, 5, 5)
         plt.title('Ground truth')
         plt.imshow(ground_truth, cmap='gray')
         plt.suptitle(f"Change detection - {city_name} ({title})", fontsize=16)
+        plt.tight_layout()
+        plt.subplots_adjust(wspace=0.3)
         plt.show()
     elif mode == "NBDI":
         plt.subplot(1, 5, 1)
-        plt.title('Image avant (t1)')
+        plt.title('Image before (t1)')
         plt.imshow(image_t1, cmap='gray')
         plt.subplot(1, 5, 2)
-        plt.title('Image après (t2)')
+        plt.title('Image after (t2)')
         plt.imshow(image_t2, cmap='gray')
         plt.subplot(1, 5, 3)
-        plt.title('Différence normale')
+        plt.title('Difference')
         plt.imshow(diff_norm, cmap='gray')
         plt.subplot(1, 5, 4)
-        plt.title('Carte de changement (Otsu)')
+        plt.title('Change map (Otsu)')
         plt.imshow(change_map, cmap='gray')
         plt.subplot(1, 5, 5)
         plt.title('Ground truth')
         plt.imshow(ground_truth, cmap='gray')
         plt.suptitle(f"Change detection - {city_name} ({title})", fontsize=16)
+        plt.tight_layout()
+        plt.subplots_adjust(wspace=0.3)
         plt.show()
     elif mode == "PCA":
         plt.subplot(1, 4, 1)
-        plt.title('Image avant (t1)')
+        plt.title('Image before (t1)')
         plt.imshow(image_t1, cmap='jet')
         plt.subplot(1, 4, 2)
-        plt.title('Image après (t2)')
+        plt.title('Image after (t2)')
         plt.imshow(image_t2, cmap='jet')
         plt.subplot(1, 4, 3)
-        plt.title('Carte de changement (Otsu)')
+        plt.title('Change map (Otsu)')
         plt.imshow(change_map, cmap='gray')
         plt.subplot(1, 4, 4)
         plt.title('Ground truth')
         plt.imshow(ground_truth, cmap='gray')
         plt.suptitle(f"Change detection - {city_name} ({title})", fontsize=16)
+        plt.tight_layout()
+        plt.subplots_adjust(wspace=0.3)
         plt.show()
 
 def evaluate_change_map(change_map: np.ndarray, ground_truth: np.ndarray)->dict:
@@ -327,6 +374,7 @@ def evaluate_change_map(change_map: np.ndarray, ground_truth: np.ndarray)->dict:
         'Kappa': kappa
     }
 
+all_metrics = []
 metrics_RGB = []
 metrics_S1 = []
 metrics_B11 = []
@@ -334,8 +382,13 @@ metrics_B11_mask_NBDI = []
 metrics_B8 = []
 metrics_CVA = []
 metrics_PCA = []
+metrics_S1_VVVH = []
+metrics_S1_VV = []
+metrics_S1_VH = []
 for (
     (image_s1_t1, image_s1_t2),
+    (image_s1_VV_t1, image_s1_VV_t2),
+    (image_s1_VH_t1, image_s1_VH_t2),
     (image_s2_t1, image_s2_t2),
     (image_s2_b11_t1, image_s2_b11_t2),
     (image_s2_b8_t1, image_s2_b8_t2),
@@ -347,6 +400,8 @@ for (
 ) in tqdm(
     zip(
         images_s1,
+        images_s1_VV,
+        images_s1_VH,
         images_s2_RGB,
         images_s2_B11,
         images_s2_B8,
@@ -360,95 +415,145 @@ for (
     desc="Processing cities"
 ): 
     diff_norm_s1, change_map_s1 = compute_change_map(image_s1_t1, image_s1_t2)
+    diff_norm_s1_VV, change_map_s1_VV = compute_change_map(image_s1_VV_t1, image_s1_VV_t2)
+    diff_norm_s1_VH, change_map_s1_VH = compute_change_map(image_s1_VH_t1, image_s1_VH_t2)
+    diff_norm_s1_VVVH, change_map_s1_VVVH = compute_change_map_VVVH(image_s1_t1, image_s1_t2, 0.6, 0.4)
     diff_norm_s2_RGB, change_map_s2_RGB = compute_change_map(image_s2_t1, image_s2_t2)
     diff_norm_s2_b11, change_map_s2_b11 = compute_change_map(image_s2_b11_t1, image_s2_b11_t2)
     diff_norm_s2_b8, change_map_s2_b8 = compute_change_map(image_s2_b8_t1, image_s2_b8_t2)
     diff_norm_cva, change_map_cva = compute_change_map(cva_t1, cva_t2)
     change_map_s2_b11_mask_NBDI = diff_norm_s2_b11 * mask_build_up_index
-    
+
     change_map_s2_b11_mask_NBDI = change_map_s2_b11_mask_NBDI.astype(np.uint8)
 
     change_map_s2_RGB, ground_truth = fitAtoB(change_map_s2_RGB, ground_truth)
     change_map_s2_b11_mask_NBDI, ground_truth = fitAtoB(change_map_s2_b11_mask_NBDI, ground_truth)
     change_map_s2_b8, ground_truth = fitAtoB(change_map_s2_b8, ground_truth)
     change_map_s2_b11, ground_truth = fitAtoB(change_map_s2_b11, ground_truth)
-    change_map_s1, ground_truth = fitAtoB(change_map_s1, ground_truth)
     change_map_cva, ground_truth = fitAtoB(change_map_cva, ground_truth)
     change_map_PCA, ground_truth = fitAtoB(PCA_feature, ground_truth)
+    change_map_s1_VVVH, ground_truth = fitAtoB(change_map_s1_VVVH, ground_truth)
+    change_map_s1, ground_truth = fitAtoB(change_map_s1, ground_truth)
+    change_map_s1_VV, ground_truth = fitAtoB(change_map_s1_VV, ground_truth)
+    change_map_s1_VH, ground_truth = fitAtoB(change_map_s1_VH, ground_truth)
 
     metrics_RGB.append(evaluate_change_map(change_map_s2_RGB, ground_truth))
-    metrics_S1.append(evaluate_change_map(change_map_s1, ground_truth))
     metrics_B11.append(evaluate_change_map(change_map_s2_b11, ground_truth))
     metrics_B11_mask_NBDI.append(evaluate_change_map(change_map_s2_b11_mask_NBDI, ground_truth))
     metrics_B8.append(evaluate_change_map(change_map_s2_b8, ground_truth))
     metrics_CVA.append(evaluate_change_map(change_map_cva, ground_truth))
     metrics_PCA.append(evaluate_change_map(change_map_PCA, ground_truth))
+    metrics_S1_VVVH.append(evaluate_change_map(change_map_s1_VVVH, ground_truth))
+    metrics_S1.append(evaluate_change_map(change_map_s1, ground_truth))
+    metrics_S1_VV.append(evaluate_change_map(change_map_s1_VV, ground_truth))
+    metrics_S1_VH.append(evaluate_change_map(change_map_s1_VH, ground_truth))
+    all_metrics.append(metrics_RGB)
+    all_metrics.append(metrics_B11)
+    all_metrics.append(metrics_B11_mask_NBDI)
+    all_metrics.append(metrics_B8)
+    all_metrics.append(metrics_CVA)
+    all_metrics.append(metrics_PCA)
+    all_metrics.append(metrics_S1_VVVH)
+    all_metrics.append(metrics_S1)
+    all_metrics.append(metrics_S1_VV)
+    all_metrics.append(metrics_S1_VH)
 
-    visualize_change_map(image_s2_t1, image_s2_t2, diff_norm_s2_RGB, change_map_s2_RGB, ground_truth, "RGB", city_name, title="RGB")
-    visualize_change_map(image_s1_t1, image_s1_t2, diff_norm_s1, change_map_s1, ground_truth, "S1", city_name, title="S1")
+    """visualize_change_map(image_s2_t1, image_s2_t2, diff_norm_s2_RGB, change_map_s2_RGB, ground_truth, "RGB", city_name, title="RGB")
     visualize_change_map(image_s2_b11_t1, image_s2_b11_t2, diff_norm_s2_b11, change_map_s2_b11, ground_truth, "B", city_name, title="B11")
     visualize_change_map(image_s2_b11_t1, image_s2_b11_t2, diff_norm_s2_b11, change_map_s2_b11_mask_NBDI, ground_truth, "B", city_name, title="B11 mask NBDI")
     visualize_change_map(image_s2_b8_t1, image_s2_b8_t2, diff_norm_s2_b8, change_map_s2_b8, ground_truth, "B", city_name, title="B8")
     visualize_change_map(cva_t1, cva_t2, diff_norm_cva, change_map_cva, ground_truth, "CVA", city_name, title="CVA")
     visualize_change_map(image_s2_t1, image_s2_t2, None, change_map_PCA, ground_truth, "PCA", city_name, title="PCA")
+    visualize_change_map(image_s1_t1, image_s1_t2, diff_norm_s1_VVVH, change_map_s1_VVVH, ground_truth, "S1", city_name, title="S1 VVVH")
+    visualize_change_map(image_s1_t1, image_s1_t2, diff_norm_s1, change_map_s1, ground_truth, "S1", city_name, title="S1")
+    visualize_change_map(image_s1_VV_t1, image_s1_VV_t2, diff_norm_s1_VV, change_map_s1_VV, ground_truth, "B", city_name, title="S1 VV")
+    visualize_change_map(image_s1_VH_t1, image_s1_VH_t2, diff_norm_s1_VH, change_map_s1_VH, ground_truth, "B", city_name, title="S1 VH")"""
 
-def mean_metric(metrics_list, key):
-    return np.round(np.mean([m[key] for m in metrics_list]), 4)
 
-print(
-    "Accuracy RGB: ", mean_metric(metrics_RGB, 'Accuracy'),
-    "Precision RGB: ", mean_metric(metrics_RGB, 'Precision'),
-    "Recall RGB: ", mean_metric(metrics_RGB, 'Recall'),
-    "F1-Score RGB: ", mean_metric(metrics_RGB, 'F1-Score'),
-    "IoU RGB: ", mean_metric(metrics_RGB, 'IoU'),
-    "Kappa RGB: ", mean_metric(metrics_RGB, 'Kappa')
-)
-print(
-    "Accuracy S1: ", mean_metric(metrics_S1, 'Accuracy'),
-    "Precision S1: ", mean_metric(metrics_S1, 'Precision'),
-    "Recall S1: ", mean_metric(metrics_S1, 'Recall'),
-    "F1-Score S1: ", mean_metric(metrics_S1, 'F1-Score'),
-    "IoU S1: ", mean_metric(metrics_S1, 'IoU'),
-    "Kappa S1: ", mean_metric(metrics_S1, 'Kappa')
-)
-print(
-    "Accuracy B11: ", mean_metric(metrics_B11, 'Accuracy'),
-    "Precision B11: ", mean_metric(metrics_B11, 'Precision'),
-    "Recall B11: ", mean_metric(metrics_B11, 'Recall'),
-    "F1-Score B11: ", mean_metric(metrics_B11, 'F1-Score'),
-    "IoU B11: ", mean_metric(metrics_B11, 'IoU'),
-    "Kappa B11: ", mean_metric(metrics_B11, 'Kappa')
-)
-print(
-    "Accuracy B11 mask NBDI: ", mean_metric(metrics_B11_mask_NBDI, 'Accuracy'),
-    "Precision B11 mask NBDI: ", mean_metric(metrics_B11_mask_NBDI, 'Precision'),
-    "Recall B11 mask NBDI: ", mean_metric(metrics_B11_mask_NBDI, 'Recall'),
-    "F1-Score B11 mask NBDI: ", mean_metric(metrics_B11_mask_NBDI, 'F1-Score'),
-    "IoU B11 mask NBDI: ", mean_metric(metrics_B11_mask_NBDI, 'IoU'),
-    "Kappa B11 mask NBDI: ", mean_metric(metrics_B11_mask_NBDI, 'Kappa')
-)
-print(
-    "Accuracy B8: ", mean_metric(metrics_B8, 'Accuracy'),
-    "Precision B8: ", mean_metric(metrics_B8, 'Precision'),
-    "Recall B8: ", mean_metric(metrics_B8, 'Recall'),
-    "F1-Score B8: ", mean_metric(metrics_B8, 'F1-Score'),
-    "IoU B8: ", mean_metric(metrics_B8, 'IoU'),
-    "Kappa B8: ", mean_metric(metrics_B8, 'Kappa')
-)
-print(
-    "Accuracy CVA: ", mean_metric(metrics_CVA, 'Accuracy'),
-    "Precision CVA: ", mean_metric(metrics_CVA, 'Precision'),
-    "Recall CVA: ", mean_metric(metrics_CVA, 'Recall'),
-    "F1-Score CVA: ", mean_metric(metrics_CVA, 'F1-Score'),
-    "IoU CVA: ", mean_metric(metrics_CVA, 'IoU'),
-    "Kappa CVA: ", mean_metric(metrics_CVA, 'Kappa')
-)
 
-print(
-    "Accuracy PCA: ", mean_metric(metrics_PCA, 'Accuracy'),
-    "Precision PCA: ", mean_metric(metrics_PCA, 'Precision'),
-    "Recall PCA: ", mean_metric(metrics_PCA, 'Recall'),
-    "F1-Score PCA: ", mean_metric(metrics_PCA, 'F1-Score'),
-    "IoU PCA: ", mean_metric(metrics_PCA, 'IoU'),
-    "Kappa PCA: ", mean_metric(metrics_PCA, 'Kappa')
-)
+########################################################
+# Evaluation des méthodes
+########################################################
+def test_alpha_beta(images_s1 : list[tuple[np.ndarray, np.ndarray]], ground_truth : list[np.ndarray])->list[dict]:
+    metrics_S1_VVVH = []
+    alpha_beta_list = []
+    for (image_s1_t1, image_s1_t2), ground_truth in zip(images_s1, ground_truth):
+        for alpha in np.arange(0, 1, 0.1):
+            for beta in np.arange(0, 1, 0.1):
+                diff_norm_s1_VVVH, change_map_s1_VVVH = compute_change_map_VVVH(image_s1_t1, image_s1_t2, alpha, beta)
+                change_map_s1_VVVH, ground_truth = fitAtoB(change_map_s1_VVVH, ground_truth)
+                metrics_S1_VVVH.append(evaluate_change_map(change_map_s1_VVVH, ground_truth))
+                alpha_beta_list.append((alpha, beta))
+    return metrics_S1_VVVH, alpha_beta_list 
+
+metrics_S1_VVVH, alpha_beta_list = test_alpha_beta(images_s1, labels)
+
+def plot_f1_alpha_beta_average(metrics_list, alpha_beta_list):
+    """
+    Affiche une heatmap du F1-score MOYEN pour chaque paire (alpha, beta)
+    même si plusieurs images ont été testées.
+    """
+
+    # Regrouper les F1-score par (alpha, beta)
+    grouped = defaultdict(list)
+    for (alpha, beta), metrics in zip(alpha_beta_list, metrics_list):
+        grouped[(alpha, beta)].append(metrics["F1-Score"])
+
+    # Extraire toutes les valeurs possibles
+    alphas = sorted(list(set([ab[0] for ab in alpha_beta_list])))
+    betas  = sorted(list(set([ab[1] for ab in alpha_beta_list])))
+
+    # Créer la grille
+    f1_grid = np.zeros((len(alphas), len(betas)))
+
+    for i, alpha in enumerate(alphas):
+        for j, beta in enumerate(betas):
+            f1_values = grouped[(alpha, beta)]
+            f1_grid[i, j] = np.mean(f1_values)  # MOYENNE !
+
+    # Plot
+    plt.figure(figsize=(8, 6))
+    plt.imshow(f1_grid, origin='lower', cmap='viridis',
+               extent=[min(betas), max(betas), min(alphas), max(alphas)])
+    plt.colorbar(label="F1 mean score")
+    plt.xlabel("Beta")
+    plt.ylabel("Alpha")
+    plt.title("F1 mean score as a function of alpha and beta")
+    plt.xticks(betas)
+    plt.yticks(alphas)
+    plt.show()
+
+    return f1_grid, alphas, betas
+
+f1_grid, alphas, betas = plot_f1_alpha_beta_average(metrics_S1_VVVH, alpha_beta_list)
+
+def summarize_metric(metrics_list, key):
+    """
+    Retourne moyenne, écart-type, minimum et maximum pour une métrique donnée.
+    """
+    values = np.array([m[key] for m in metrics_list], dtype=float)
+
+    return {
+        "mean": np.round(np.mean(values), 4),
+        "std": np.round(np.std(values), 4),
+        "min": np.round(np.min(values), 4),
+        "max": np.round(np.max(values), 4)
+    }
+def print_summary_metrics(metrics_list, prefix=""):
+    metrics_names = ['F1-Score', 'IoU', 'Kappa']
+
+    print(f"\nRésumé des métriques {prefix}:")
+    for key in metrics_names:
+        stats = summarize_metric(metrics_list, key)
+        print(
+            f"{key}: "
+            f"mean={stats['mean']}, "
+            f"std={stats['std']}, "
+            f"min={stats['min']}, "
+            f"max={stats['max']}"
+        )
+method_names = [
+    "RGB", "B11", "B11_mask_NBDI", "B8", "CVA", "PCA", "S1_VVVH", "S1", "S1_VV", "S1_VH"
+]
+for name, metrics in zip(method_names, all_metrics):
+    print_summary_metrics(metrics, prefix=name)
